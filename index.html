@@ -1,0 +1,594 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no" />
+  <title>SOLREAPER — Reap or Be Reaped</title>
+  <meta name="description" content="SOLREAPER mini game: Catch SOL, grab diamonds to grow briefly, miss 10 and you're done." />
+  <style>
+    html, body {
+      margin:0; padding:0; height:100%;
+      background:#050406; overflow:hidden;
+      font-family: system-ui, -apple-system, Segoe UI, Roboto, Arial;
+    }
+
+    #wrap{
+      position:relative; height:100%; width:100%;
+      background:
+        linear-gradient(180deg, rgba(0,0,0,.55), rgba(0,0,0,.88)),
+        url("bg.png");
+      background-size: cover;
+      background-position: center;
+    }
+
+    canvas {
+      display:block;
+      width:100%;
+      height:100%;
+      touch-action:none;
+      background: transparent;
+    }
+
+    .ui{
+      position:absolute; left:0; right:0; top:0; padding:14px 14px 0;
+      color:#f3f3f3; pointer-events:none;
+      text-shadow: 0 2px 10px rgba(0,0,0,.65);
+    }
+    .row{ display:flex; gap:10px; align-items:flex-start; justify-content:space-between; }
+    .card{
+      background: rgba(0,0,0,.35);
+      border: 1px solid rgba(255,255,255,.08);
+      backdrop-filter: blur(6px);
+      border-radius: 14px;
+      padding: 10px 12px;
+      min-width: 140px;
+    }
+    .title{ font-weight:800; letter-spacing:.08em; }
+    .muted{ opacity:.85; font-size:12px; margin-top:2px; }
+    .big{ font-size:18px; font-weight:800; }
+
+    .center{
+      position:absolute; inset:0;
+      display:flex; align-items:center; justify-content:center;
+      pointer-events:none;
+    }
+    .modal{
+      width:min(520px, calc(100% - 28px));
+      background: rgba(0,0,0,.55);
+      border: 1px solid rgba(255,255,255,.10);
+      border-radius: 18px;
+      padding: 18px 16px;
+      color:#fff;
+      text-align:center;
+      box-shadow: 0 30px 80px rgba(0,0,0,.55);
+      pointer-events:auto;
+    }
+    .modal h1{ margin:6px 0 6px; font-size:22px; letter-spacing:.10em; }
+    .modal p{ margin:8px 0; opacity:.9; line-height:1.35; }
+    .btns{ display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:12px; }
+    button{
+      border: 1px solid rgba(255,255,255,.14);
+      background: rgba(255,255,255,.06);
+      color:#fff;
+      padding: 10px 14px;
+      border-radius: 14px;
+      font-weight: 700;
+      letter-spacing:.02em;
+      cursor:pointer;
+    }
+    button.primary{
+      background: linear-gradient(180deg, rgba(255,76,76,.22), rgba(255,0,0,.10));
+      border-color: rgba(255,76,76,.35);
+    }
+    button:active{ transform: translateY(1px); }
+    .tiny{ font-size:12px; opacity:.85; }
+  </style>
+</head>
+
+<body>
+<div id="wrap">
+  <canvas id="c"></canvas>
+
+  <div class="ui">
+    <div class="row">
+      <div class="card">
+        <div class="title">SOLREAPER</div>
+        <div class="muted">Reap SOLs. Diamonds empower.</div>
+      </div>
+      <div class="card">
+        <div class="big">Score: <span id="score">0</span></div>
+        <div class="muted">
+          Time: <span id="time">60.0</span>s • Misses: <span id="misses">0</span>/10 • Best: <span id="best">0</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="center" id="overlay">
+    <div class="modal">
+      <div class="tiny">SOL Reaper</div>
+      <h1 id="ovTitle">REAP OR BE REAPED</h1>
+      <p id="ovBody">
+        Drag SOLREAPER left/right. Catch <b>SOL</b> to score.<br/>
+        Catch a <b>diamond</b> to grow + move faster for 3 seconds.
+      </p>
+      <div class="btns">
+        <button class="primary" id="startBtn">Start (60s)</button>
+        <button id="howBtn">How to Play</button>
+      </div>
+      <p class="tiny" id="hint">Tip: stay calm. Chase less. Reap more.</p>
+    </div>
+  </div>
+</div>
+
+<script>
+(() => {
+  // Canvas
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: true });
+
+  const scoreEl  = document.getElementById('score');
+  const timeEl   = document.getElementById('time');
+  const missesEl = document.getElementById('misses');
+  const bestEl   = document.getElementById('best');
+  const overlay  = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const howBtn   = document.getElementById('howBtn');
+  const hintEl   = document.getElementById('hint');
+  const ovTitle  = document.getElementById('ovTitle');
+  const ovBody   = document.getElementById('ovBody');
+
+  // HiDPI resize
+  let W=0, H=0, DPR=1;
+  function resize() {
+    DPR = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    W = Math.floor(window.innerWidth);
+    H = Math.floor(window.innerHeight);
+    canvas.width = Math.floor(W * DPR);
+    canvas.height = Math.floor(H * DPR);
+    ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+  }
+  window.addEventListener('resize', resize, { passive:true });
+  resize();
+
+  // Best score
+  const BEST_KEY = "solreaper_best_score";
+  let best = Number(localStorage.getItem(BEST_KEY) || 0);
+  bestEl.textContent = best;
+
+  // SOLREAPER sprite
+  const reaperImg = new Image();
+  reaperImg.src = "solreaper.png";
+  let reaperReady = false;
+  reaperImg.onload = () => { reaperReady = true; };
+
+  // Diamond sprite (ONLY NEW ADDITION)
+  const diamondImg = new Image();
+  diamondImg.src = "diamond.png";
+  let diamondReady = false;
+  diamondImg.onload = () => { diamondReady = true; };
+
+  // Game constants
+  const GAME_LEN = 60.0;
+  const MAX_MISSES = 10;
+
+  const DIAMOND_DURATION = 3.0;
+  const ENLARGE_SCALE = 1.25;
+  const SPEED_BOOST = 1.15;
+
+  // Difficulty curve (spawn + falling)
+  const SPAWN_WARMUP_START = 0.95;
+  const SPAWN_WARMUP_END   = 0.75;
+  const SPAWN_RAMP_END     = 0.30;
+
+  const FALL_WARMUP_START = 0.95;
+  const FALL_WARMUP_END   = 1.10;
+  const FALL_RAMP_END     = 2.15;
+
+  const DIAMOND_RATE_WARMUP = 0.08;
+  const DIAMOND_RATE_RAMP   = 0.12;
+
+  // Movement feel
+  const K_SNAPPY = 18;
+  const K_WEIGHTY = 10;
+
+  // Coin spin
+  const COIN_SPIN_MIN = 7.0;
+  const COIN_SPIN_MAX = 12.0;
+
+  // Extra speed over time
+  const ELAPSED_SPEED_BOOST_MAX = 260;
+
+  // State
+  let running = false;
+  let tLeft = GAME_LEN;
+  let score = 0;
+  let misses = 0;
+  let spawnTimer = 0;
+
+  // Player
+  const player = {
+    x: W/2, y: H*0.80,
+    targetX: W/2,
+    baseR: 30,
+    scale: 1,
+    enlarged: false,
+    enlargeLeft: 0
+  };
+
+  const TYPES = { COIN: 0, DIAMOND: 1 };
+  const items = [];
+
+  // Input (unchanged from working version)
+  let pointerDown = false;
+  function setTargetFromClientX(clientX) {
+    const rect = canvas.getBoundingClientRect();
+    player.targetX = (clientX - rect.left);
+  }
+  canvas.addEventListener('pointerdown', (e) => {
+    pointerDown = true;
+    canvas.setPointerCapture(e.pointerId);
+    setTargetFromClientX(e.clientX);
+  }, { passive:true });
+
+  canvas.addEventListener('pointermove', (e) => {
+    if (!pointerDown) return;
+    setTargetFromClientX(e.clientX);
+  }, { passive:true });
+
+  canvas.addEventListener('pointerup', () => { pointerDown = false; }, { passive:true });
+  canvas.addEventListener('pointercancel', () => { pointerDown = false; }, { passive:true });
+
+  // UI buttons
+  startBtn.addEventListener('click', () => {
+    overlay.style.display = "none";
+    resetGame();
+  });
+  howBtn.addEventListener('click', () => {
+    hintEl.textContent = "Drag to move. SOLs = +1. Miss 10 SOLs OR survive 60s. Diamonds boost you for 3s.";
+  });
+
+  function resetGame() {
+    items.length = 0;
+    score = 0; misses = 0;
+    tLeft = GAME_LEN;
+    spawnTimer = 0;
+
+    player.x = W/2;
+    player.targetX = W/2;
+    player.y = H*0.80;
+    player.scale = 1;
+    player.enlarged = false;
+    player.enlargeLeft = 0;
+
+    scoreEl.textContent = score;
+    missesEl.textContent = misses;
+    timeEl.textContent = tLeft.toFixed(1);
+
+    ovTitle.textContent = "REAP OR BE REAPED";
+    ovBody.innerHTML =
+      `Drag SOLREAPER left/right. Catch <b>SOL</b> to score.<br/>
+       Catch a <b>diamond</b> to grow + move faster for 3 seconds.`;
+    hintEl.textContent = "Tip: stay calm. Chase less. Reap more.";
+    startBtn.textContent = "Start (60s)";
+
+    running = true;
+  }
+
+  function endGame(reason) {
+    running = false;
+
+    if (score > best) {
+      best = score;
+      localStorage.setItem(BEST_KEY, String(best));
+      bestEl.textContent = best;
+      hintEl.textContent = "New best. The Reaper approves.";
+    } else {
+      hintEl.textContent =
+        (reason === "misses") ? "Too many missed SOLs. Weak hands escaped."
+      : (reason === "time") ? "Time’s up. Reap or be reaped."
+      : "GAME OVER. Reap or be reaped.";
+    }
+
+    ovTitle.textContent = "GAME OVER";
+    ovBody.innerHTML =
+      `Score: <b>${score}</b> • Misses: <b>${misses}</b>/${MAX_MISSES} • Best: <b>${best}</b><br/>
+       <span class="tiny">Diamonds empower for 3 seconds. SOLs you miss count against you.</span>`;
+    startBtn.textContent = "Play Again";
+
+    overlay.style.display = "flex";
+  }
+
+  // Helpers
+  function clamp(v, a, b) { return Math.max(a, Math.min(b, v)); }
+  function clamp01(v) { return clamp(v, 0, 1); }
+  function lerp(a, b, t) { return a + (b - a) * t; }
+  function circleHit(ax, ay, ar, bx, by, br) {
+    const dx = ax - bx, dy = ay - by;
+    return (dx*dx + dy*dy) <= (ar + br) * (ar + br);
+  }
+
+  function getDifficulty(elapsed) {
+    let spawnInterval, fallMult, diamondRate;
+
+    if (elapsed <= 12) {
+      const p = clamp01(elapsed / 12);
+      spawnInterval = lerp(SPAWN_WARMUP_START, SPAWN_WARMUP_END, p);
+      fallMult = lerp(FALL_WARMUP_START, FALL_WARMUP_END, p);
+      diamondRate = DIAMOND_RATE_WARMUP;
+    } else {
+      const p = clamp01((elapsed - 12) / 48);
+      spawnInterval = lerp(SPAWN_WARMUP_END, SPAWN_RAMP_END, p);
+      fallMult = lerp(FALL_WARMUP_END, FALL_RAMP_END, p);
+      diamondRate = DIAMOND_RATE_RAMP;
+    }
+
+    if (player.enlarged) diamondRate = 0;
+    return { spawnInterval, fallMult, diamondRate };
+  }
+
+  function spawnItem(elapsed) {
+    const { fallMult, diamondRate } = getDifficulty(elapsed);
+    const type = (Math.random() < diamondRate) ? TYPES.DIAMOND : TYPES.COIN;
+
+    const x = 30 + Math.random() * (W - 60);
+    const y = -30;
+
+    const size = (type === TYPES.DIAMOND) ? 16 : (14 + Math.random() * 4);
+
+    const elapsedP = clamp01(elapsed / GAME_LEN);
+    const elapsedBoost = elapsedP * ELAPSED_SPEED_BOOST_MAX;
+    const base = 240 + elapsedBoost;
+    const speed = (base + Math.random() * 90) * fallMult;
+
+    const rot = Math.random() * Math.PI * 2;
+    const rotSpeed = lerp(COIN_SPIN_MIN, COIN_SPIN_MAX, Math.random()) * (Math.random() < 0.5 ? -1 : 1);
+
+    items.push({ type, x, y, size, speed, rot, rotSpeed });
+  }
+
+  // Background FX overlays
+  function bgFX() {
+    ctx.globalAlpha = 0.14;
+    ctx.fillStyle = "#ff2b2b";
+    ctx.fillRect(0, H*0.60, W, H*0.40);
+    ctx.globalAlpha = 1;
+
+    for (let i=0; i<60; i++) {
+      const ex = (i*97 + performance.now()*0.04) % (W+120) - 60;
+      const ey = (i*173 + performance.now()*0.05) % (H+200) - 100;
+      const r = 1 + (i%3);
+      ctx.globalAlpha = 0.10;
+      ctx.beginPath();
+      ctx.arc(ex, H-ey, r, 0, Math.PI*2);
+      ctx.fillStyle = (i%2===0) ? "#ff3b2f" : "#ffb04a";
+      ctx.fill();
+    }
+    ctx.globalAlpha = 1;
+
+    const vg = ctx.createRadialGradient(W/2, H/2, H*0.25, W/2, H/2, H*0.80);
+    vg.addColorStop(0, "rgba(0,0,0,0)");
+    vg.addColorStop(1, "rgba(0,0,0,0.55)");
+    ctx.fillStyle = vg;
+    ctx.fillRect(0, 0, W, H);
+  }
+
+  // Draw SOLREAPER sprite
+  function drawReaper() {
+    const x = player.x;
+    const y = player.y;
+    const s = player.scale;
+
+    const baseW = 80, baseH = 80;
+    const w = baseW * s, h = baseH * s;
+
+    ctx.save();
+    ctx.globalAlpha = 0.45;
+    ctx.fillStyle = "#000";
+    ctx.beginPath();
+    ctx.ellipse(x, y + h*0.32, w*0.32, h*0.10, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+
+    if (player.enlarged) {
+      ctx.save();
+      ctx.globalAlpha = 0.22;
+      ctx.fillStyle = "rgba(255,60,60,0.85)";
+      ctx.beginPath();
+      ctx.ellipse(x, y + h*0.10, w*0.40, h*0.18, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.restore();
+    }
+
+    if (reaperReady) {
+      ctx.drawImage(reaperImg, x - w/2, y - h/2 - 22, w, h);
+    } else {
+      ctx.fillStyle = "rgba(180,0,0,0.75)";
+      ctx.beginPath();
+      ctx.arc(x, y, 42*s, 0, Math.PI*2);
+      ctx.fill();
+    }
+  }
+
+  function drawCoin(it) {
+    const x = it.x, y = it.y, r = it.size;
+    const a = it.rot || 0;
+    const flip = Math.abs(Math.cos(a));
+    const sx = 0.22 + 0.78 * flip;
+
+    ctx.save();
+    ctx.translate(x, y);
+    ctx.scale(sx, 1);
+
+    ctx.globalAlpha = 0.22;
+    ctx.fillStyle = "rgba(255, 190, 60, 1)";
+    ctx.beginPath();
+    ctx.arc(0, 0, r * 1.55, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    const hx = -r * (0.35 + 0.20 * Math.cos(a));
+    const hy = -r * 0.35;
+    const g = ctx.createRadialGradient(hx, hy, r*0.15, 0, 0, r);
+    g.addColorStop(0, "rgba(255,245,180,0.98)");
+    g.addColorStop(0.45, "rgba(255,196,70,0.98)");
+    g.addColorStop(1, "rgba(185,120,20,0.98)");
+
+    ctx.fillStyle = g;
+    ctx.strokeStyle = "rgba(255,255,255,0.33)";
+    ctx.lineWidth = 2;
+
+    ctx.beginPath();
+    ctx.arc(0, 0, r, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+
+    ctx.strokeStyle = "rgba(90,40,0,0.35)";
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r*0.72, 0, Math.PI*2);
+    ctx.stroke();
+
+    ctx.globalAlpha = 0.85;
+    ctx.fillStyle = "rgba(90,40,0,0.55)";
+    ctx.font = `900 ${Math.max(11, Math.floor(r*1.0))}px system-ui`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("S", 0, 0.5);
+    ctx.globalAlpha = 1;
+
+    ctx.restore();
+  }
+
+  // DIAMOND DRAW: the ONLY functional change vs prior code
+  function drawDiamond(it) {
+    const s = it.size * 2.6; // visual size multiplier; collision still uses it.size
+    if (diamondReady) {
+      ctx.drawImage(diamondImg, it.x - s/2, it.y - s/2, s, s);
+    } else {
+      // fallback to simple diamond if image not loaded
+      ctx.fillStyle = "rgba(120,220,255,0.85)";
+      ctx.strokeStyle = "rgba(255,255,255,0.65)";
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(it.x, it.y - it.size);
+      ctx.lineTo(it.x + it.size, it.y);
+      ctx.lineTo(it.x, it.y + it.size);
+      ctx.lineTo(it.x - it.size, it.y);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+  }
+
+  function drawItem(it) {
+    if (it.type === TYPES.COIN) drawCoin(it);
+    else drawDiamond(it);
+  }
+
+  // Main loop
+  let last = performance.now();
+  function loop(now) {
+    const dt = Math.min(0.033, (now - last) / 1000);
+    last = now;
+
+    player.y = H * 0.80;
+
+    ctx.clearRect(0, 0, W, H);
+    bgFX();
+
+    if (running) {
+      tLeft -= dt;
+      if (tLeft <= 0) {
+        tLeft = 0;
+        timeEl.textContent = tLeft.toFixed(1);
+        endGame("time");
+      } else {
+        timeEl.textContent = tLeft.toFixed(1);
+      }
+
+      const elapsed = GAME_LEN - tLeft;
+
+      if (player.enlarged) {
+        player.enlargeLeft -= dt;
+        if (player.enlargeLeft <= 0) {
+          player.enlarged = false;
+          player.enlargeLeft = 0;
+          player.scale = 1;
+        }
+      }
+
+      if (misses >= MAX_MISSES) endGame("misses");
+
+      // Movement
+      const p = clamp01((elapsed - 10) / 50);
+      const k = lerp(K_SNAPPY, K_WEIGHTY, p);
+      const boost = player.enlarged ? SPEED_BOOST : 1;
+      const alpha = 1 - Math.exp(-(k * boost) * dt);
+      player.x += (player.targetX - player.x) * alpha;
+
+      const hitR = player.baseR * player.scale;
+      player.x = clamp(player.x, hitR + 10, W - hitR - 10);
+
+      // Spawn
+      const { spawnInterval } = getDifficulty(elapsed);
+      spawnTimer += dt;
+      while (spawnTimer >= spawnInterval) {
+        spawnTimer -= spawnInterval;
+        spawnItem(elapsed);
+      }
+
+      // Update items
+      for (let i = items.length - 1; i >= 0; i--) {
+        const it = items[i];
+        it.y += it.speed * dt;
+
+        if (it.type === TYPES.COIN) it.rot += it.rotSpeed * dt;
+
+        const hitR2 = player.baseR * player.scale;
+        const hit = circleHit(player.x, player.y - 8, hitR2, it.x, it.y, it.size);
+
+        if (hit) {
+          if (it.type === TYPES.COIN) {
+            score += 1;
+            scoreEl.textContent = score;
+            items.splice(i, 1);
+            continue;
+          } else {
+            items.splice(i, 1);
+            if (!player.enlarged) {
+              player.enlarged = true;
+              player.enlargeLeft = DIAMOND_DURATION;
+              player.scale = ENLARGE_SCALE;
+            }
+            continue;
+          }
+        }
+
+        if (it.y > H + 40) {
+          if (it.type === TYPES.COIN) {
+            misses += 1;
+            missesEl.textContent = misses;
+            if (misses >= MAX_MISSES) {
+              items.splice(i, 1);
+              endGame("misses");
+              break;
+            }
+          }
+          items.splice(i, 1);
+        }
+      }
+    }
+
+    for (const it of items) drawItem(it);
+    drawReaper();
+
+    requestAnimationFrame(loop);
+  }
+
+  overlay.style.display = "flex";
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
