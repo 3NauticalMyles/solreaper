@@ -95,6 +95,7 @@
         <div class="title">SOLREAPER</div>
         <div class="muted">Reap SOLs. Diamonds empower. Skull ends you.</div>
       </div>
+
       <div class="card">
         <div class="big">Score: <span id="score">0</span></div>
         <div class="muted">
@@ -103,6 +104,14 @@
         <div class="muted">
           Streak: <span id="streak">0</span> • Coin: <span id="coinVal">1</span>x
         </div>
+
+        <!-- NEW: local player + local scores -->
+        <div class="muted">
+          Name: <span id="playerName">anon</span> •
+          <span id="editName" style="text-decoration:underline;cursor:pointer;pointer-events:auto;">edit</span> •
+          <span id="clearScores" style="text-decoration:underline;cursor:pointer;pointer-events:auto;">clear</span>
+        </div>
+        <div class="muted" id="myScores" style="margin-top:6px; max-height:120px; overflow:auto;"></div>
       </div>
     </div>
   </div>
@@ -145,6 +154,89 @@
   const streakEl = document.getElementById('streak');
   const coinValEl = document.getElementById('coinVal');
 
+  // ----------------------------
+  // NEW: Local leaderboard + clear scores
+  // ----------------------------
+  const NAME_KEY = "solreaper_player_name";
+  const SCORES_KEY = "solreaper_my_scores_v1";
+  const MAX_SAVED = 15;
+
+  const playerNameEl = document.getElementById("playerName");
+  const editNameEl = document.getElementById("editName");
+  const clearScoresEl = document.getElementById("clearScores");
+  const myScoresEl = document.getElementById("myScores");
+
+  function safeName(s) {
+    const t = (s || "").trim().slice(0, 18);
+    return t.length ? t : "anon";
+  }
+
+  let playerName = safeName(localStorage.getItem(NAME_KEY) || "anon");
+  playerNameEl.textContent = playerName;
+
+  function loadMyScores() {
+    try { return JSON.parse(localStorage.getItem(SCORES_KEY) || "[]"); }
+    catch { return []; }
+  }
+
+  function saveMyScores(rows) {
+    localStorage.setItem(SCORES_KEY, JSON.stringify(rows.slice(0, MAX_SAVED)));
+  }
+
+  function renderMyScores() {
+    const rows = loadMyScores();
+    if (!rows.length) {
+      myScoresEl.innerHTML = "<span style='opacity:.7'>My Scores: none yet</span>";
+      return;
+    }
+
+    const sorted = [...rows].sort((a,b) =>
+      (b.score - a.score) ||
+      (b.timeLeft - a.timeLeft) ||
+      (b.ts - a.ts)
+    );
+
+    let html = "<div style='font-weight:800;letter-spacing:.06em;margin-bottom:4px'>MY SCORES</div>";
+    sorted.slice(0, 10).forEach((r, i) => {
+      html += `${i+1}. <b>${r.score}</b> • ${Number(r.timeLeft).toFixed(1)}s left<br/>`;
+    });
+
+    myScoresEl.innerHTML = html;
+  }
+
+  function recordMyScore(finalScore, timeLeft) {
+    const rows = loadMyScores();
+    rows.unshift({
+      name: playerName,
+      score: Math.max(0, finalScore|0),
+      timeLeft: Math.max(0, +timeLeft),
+      ts: Date.now()
+    });
+    saveMyScores(rows);
+    renderMyScores();
+  }
+
+  function clearMyScores() {
+    const ok = confirm("Clear all saved scores on this device?");
+    if (!ok) return;
+    localStorage.removeItem(SCORES_KEY);
+    renderMyScores();
+  }
+
+  editNameEl.addEventListener("click", () => {
+    const next = safeName(prompt("Name for this device leaderboard (1–18 chars):", playerName));
+    playerName = next;
+    localStorage.setItem(NAME_KEY, playerName);
+    playerNameEl.textContent = playerName;
+    renderMyScores();
+  });
+
+  clearScoresEl.addEventListener("click", clearMyScores);
+
+  // render on load
+  renderMyScores();
+  // ----------------------------
+
   // HiDPI resize
   let W=0, H=0, DPR=1;
   function resize() {
@@ -175,24 +267,24 @@
   let diamondReady = false;
   diamondImg.onload = () => { diamondReady = true; };
 
-  // Skull sprite (NEW)
+  // Skull sprite
   const skullImg = new Image();
   skullImg.src = "skull.png";
   let skullReady = false;
   skullImg.onload = () => { skullReady = true; };
 
   // Game constants
-  const GAME_LEN = 90.0;          // CHANGED
+  const GAME_LEN = 90.0;
   const MAX_MISSES = 10;
 
   const DIAMOND_DURATION = 3.0;
   const ENLARGE_SCALE = 1.25;
   const SPEED_BOOST = 1.15;
 
-  // Skull spawn rule: 1 skull every 15 seconds (NEW)
+  // Skull spawn rule: 1 skull every 15 seconds
   const SKULL_PERIOD = 15.0;
 
-  // Difficulty curve (spawn + falling) tuned for 60 originally; we keep it but stretch ramp across 90
+  // Difficulty curve
   const SPAWN_WARMUP_START = 0.95;
   const SPAWN_WARMUP_END   = 0.75;
   const SPAWN_RAMP_END     = 0.30;
@@ -222,11 +314,11 @@
   let misses = 0;
   let spawnTimer = 0;
 
-  // NEW: streak scoring state
+  // streak scoring state
   let streak = 0;
   let coinValue = 1;
 
-  // NEW: skull timing
+  // skull timing
   let nextSkullAt = SKULL_PERIOD;
 
   // Player
@@ -239,7 +331,7 @@
     enlargeLeft: 0
   };
 
-  const TYPES = { COIN: 0, DIAMOND: 1, SKULL: 2 }; // NEW
+  const TYPES = { COIN: 0, DIAMOND: 1, SKULL: 2 };
   const items = [];
 
   // Input
@@ -277,13 +369,13 @@
     tLeft = GAME_LEN;
     spawnTimer = 0;
 
-    // NEW: reset streak state
+    // reset streak state
     streak = 0;
     coinValue = 1;
     streakEl.textContent = streak;
     coinValEl.textContent = coinValue;
 
-    // NEW: reset skull schedule
+    // reset skull schedule
     nextSkullAt = SKULL_PERIOD;
 
     player.x = W/2;
@@ -310,6 +402,9 @@
 
   function endGame(reason) {
     running = false;
+
+    // NEW: record this run locally (score + time remaining)
+    recordMyScore(score, tLeft);
 
     if (score > best) {
       best = score;
@@ -345,14 +440,12 @@
   function getDifficulty(elapsed) {
     let spawnInterval, fallMult, diamondRate;
 
-    // Warmup still 12 seconds
     if (elapsed <= 12) {
       const p = clamp01(elapsed / 12);
       spawnInterval = lerp(SPAWN_WARMUP_START, SPAWN_WARMUP_END, p);
       fallMult = lerp(FALL_WARMUP_START, FALL_WARMUP_END, p);
       diamondRate = DIAMOND_RATE_WARMUP;
     } else {
-      // Stretch ramp across remaining time (was 48 for 60s; now 78 for 90s)
       const rampSpan = Math.max(1, GAME_LEN - 12);
       const p = clamp01((elapsed - 12) / rampSpan);
       spawnInterval = lerp(SPAWN_WARMUP_END, SPAWN_RAMP_END, p);
@@ -384,14 +477,12 @@
     items.push({ type, x, y, size, speed, rot, rotSpeed });
   }
 
-  // NEW: spawn skull
   function spawnSkull(elapsed) {
     const { fallMult } = getDifficulty(elapsed);
 
     const x = 30 + Math.random() * (W - 60);
     const y = -40;
 
-    // Slightly bigger than diamond; adjust as needed
     const size = 14;
 
     const elapsedP = clamp01(elapsed / GAME_LEN);
@@ -402,7 +493,6 @@
     items.push({ type: TYPES.SKULL, x, y, size, speed, rot: 0, rotSpeed: 0 });
   }
 
-  // Background FX overlays
   function bgFX() {
     ctx.globalAlpha = 0.14;
     ctx.fillStyle = "#ff2b2b";
@@ -428,7 +518,6 @@
     ctx.fillRect(0, 0, W, H);
   }
 
-  // Draw SOLREAPER sprite
   function drawReaper() {
     const x = player.x;
     const y = player.y;
@@ -534,13 +623,11 @@
     }
   }
 
-  // NEW: draw skull
   function drawSkull(it) {
     const s = it.size * 2.2;
     if (skullReady) {
       ctx.drawImage(skullImg, it.x - s/2, it.y - s/2, s, s);
     } else {
-      // fallback simple mark
       ctx.fillStyle = "rgba(255,255,255,0.85)";
       ctx.beginPath();
       ctx.arc(it.x, it.y, it.size, 0, Math.PI*2);
@@ -559,7 +646,7 @@
     return drawSkull(it);
   }
 
-  // NEW: streak logic helpers
+  // streak helpers
   function resetStreak() {
     streak = 0;
     coinValue = 1;
@@ -569,8 +656,6 @@
 
   function onCoinCaught() {
     streak += 1;
-
-    // Every 10 consecutive coins increases coinValue by +1
     if (streak % 10 === 0) coinValue += 1;
 
     streakEl.textContent = streak;
@@ -614,7 +699,6 @@
 
       if (misses >= MAX_MISSES) endGame("misses");
 
-      // Movement
       const p = clamp01((elapsed - 10) / Math.max(1, (GAME_LEN - 10)));
       const k = lerp(K_SNAPPY, K_WEIGHTY, p);
       const boost = player.enlarged ? SPEED_BOOST : 1;
@@ -624,7 +708,6 @@
       const hitR = player.baseR * player.scale;
       player.x = clamp(player.x, hitR + 10, W - hitR - 10);
 
-      // Spawn coins/diamonds
       const { spawnInterval } = getDifficulty(elapsed);
       spawnTimer += dt;
       while (spawnTimer >= spawnInterval) {
@@ -632,13 +715,11 @@
         spawnItem(elapsed);
       }
 
-      // NEW: spawn skull every 15 seconds (at ~15,30,45,60,75)
       while (elapsed >= nextSkullAt && nextSkullAt <= GAME_LEN) {
         spawnSkull(elapsed);
         nextSkullAt += SKULL_PERIOD;
       }
 
-      // Update items + collisions
       for (let i = items.length - 1; i >= 0; i--) {
         const it = items[i];
         it.y += it.speed * dt;
@@ -663,7 +744,6 @@
             }
             continue;
           }
-          // SKULL: end immediately
           if (it.type === TYPES.SKULL) {
             items.splice(i, 1);
             endGame("skull");
@@ -671,13 +751,11 @@
           }
         }
 
-        // Out of bounds
         if (it.y > H + 40) {
           if (it.type === TYPES.COIN) {
             misses += 1;
             missesEl.textContent = misses;
 
-            // NEW: streak resets on miss
             resetStreak();
 
             if (misses >= MAX_MISSES) {
